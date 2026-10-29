@@ -1,0 +1,887 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image Downloader</title>
+<style>
+:root {
+  --bg: #f3f5f4; --panel: #ffffff; --fg: #16201c; --muted: #5d6b65; --line: #d9dfdc;
+  --accent: #0b6b4f; --accent-fg: #ffffff; --bad: #b3261e; --ok: #0b6b4f;
+  --font-body: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101614; --panel: #18211e; --fg: #e6ece9; --muted: #9aa9a2;
+    --line: #2b3732; --accent: #3fc79b; --accent-fg: #07251b; --bad: #ff8a80; --ok: #3fc79b;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.5 var(--font-body);
+  padding-block: 28px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+main { max-width: 760px; margin: 0 auto; display: grid; gap: 20px; }
+h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.01em; }
+.sub { margin: 4px 0 0; color: var(--muted); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 12px; }
+label { font-weight: 600; font-size: 0.9rem; }
+textarea, select, input[type="number"] {
+  font: 13px/1.5 var(--font-mono); color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+}
+textarea { width: 100%; min-height: 110px; resize: vertical; }
+select { font-family: var(--font-body); font-size: 0.9rem; padding: 8px 10px; max-width: 100%; }
+input[type="number"] { width: 80px; padding: 6px 8px; font-family: var(--font-body); }
+textarea:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button, .btn {
+  font: inherit; font-weight: 600; font-size: 0.9rem; cursor: pointer; text-decoration: none;
+  padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--fg); display: inline-flex; align-items: center; justify-content: center;
+}
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: default; }
+.status { color: var(--muted); font-size: 0.88rem; margin-left: auto; }
+.list { display: grid; gap: 10px; }
+.item { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; align-items: center; }
+.thumb { width: 88px; height: 88px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); display: grid; place-items: center; overflow: hidden; color: var(--muted); font-size: 0.75rem; text-align: center; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.meta { min-width: 0; display: grid; gap: 6px; }
+.name { font-weight: 600; overflow-wrap: anywhere; }
+.url { font: 12px/1.4 var(--font-mono); color: var(--muted); overflow-wrap: anywhere; }
+.msg { font-size: 0.82rem; color: var(--muted); }
+.msg.ok { color: var(--ok); }
+.msg.bad { color: var(--bad); }
+[hidden] { display: none !important; }
+.page { display: grid; gap: 20px; }
+.tabs { display: flex; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 4px; }
+.tabs button { flex: 1; border: 0; background: transparent; padding: 10px 6px; font-size: 0.85rem; }
+.tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-fg); }
+details.pick { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+details.pick summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+.pickbody { display: grid; gap: 10px; margin-top: 10px; }
+input[type="file"] { font: inherit; font-size: 0.9rem; color: var(--fg); max-width: 100%; }
+.chk { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 0.9rem; }
+.vinlist { max-height: 320px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.vinrow { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.vinrow:last-child { border-bottom: 0; }
+.vinrow .v { font: 13px/1.3 var(--font-mono); overflow-wrap: anywhere; }
+.vinrow .n { color: var(--muted); font-size: 0.82rem; white-space: nowrap; }
+.bar { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.bar > div { height: 100%; width: 0; background: var(--accent); }
+.empty { color: var(--muted); text-align: center; padding: 24px 8px; border: 1px dashed var(--line); border-radius: 10px; }
+.item .row button, .item .row .btn { padding: 6px 12px; }
+.opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.opt { display: grid; gap: 6px; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.checks label { font-weight: 500; display: inline-flex; gap: 6px; align-items: center; }
+dialog { border: 1px solid var(--line); border-radius: 12px; padding: 0; background: var(--panel); color: var(--fg); width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
+dialog::backdrop { background: rgba(0,0,0,0.5); }
+.dlg { padding: 18px; display: grid; gap: 12px; }
+.dlg h2 { margin: 0; font-size: 1.15rem; }
+.dlg p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+.sample { margin: 0; font: 12px/1.5 var(--font-mono); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; white-space: pre; }
+.dlg ul { margin: 0; padding-left: 18px; font-size: 0.88rem; display: grid; gap: 4px; }
+@media (max-width: 440px) {
+  .item { grid-template-columns: 64px minmax(0, 1fr); }
+  .thumb { width: 64px; height: 64px; }
+  .status { margin-left: 0; width: 100%; }
+}
+.cqgrid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 16px; align-items: start; }
+.cqcol { display: grid; gap: 16px; }
+@media (max-width: 640px) { .cqgrid { grid-template-columns: 1fr; } }
+.cqgrid textarea { min-height: 150px; }
+.cqopts { align-content: start; }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.seg button { padding: 12px 6px; }
+.seg button.active { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.cqcheck { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid var(--accent); border-radius: 8px; color: var(--accent); text-transform: uppercase; letter-spacing: .03em; cursor: pointer; }
+dialog#csvDlg { width: min(760px, calc(100vw - 24px)); }
+.dlg h3.step { margin: 6px 0 0; font-size: 1rem; }
+.xlwrap { overflow-x: auto; border: 1px solid var(--xl-line); border-radius: 6px; }
+.xl { border-collapse: collapse; font: 13px/1.4 Calibri, "Segoe UI", Arial, sans-serif; background: var(--xl-cell); color: var(--xl-text); min-width: 100%; }
+.xl th, .xl td { border: 1px solid var(--xl-line); padding: 5px 8px; text-align: left; vertical-align: top; }
+.xl thead th, .xl tbody th { background: var(--xl-hdr); color: var(--xl-hdr-text); font-weight: 400; text-align: center; font-size: 12px; }
+.xl tbody th { width: 34px; }
+.xl .corner { width: 34px; }
+.xl tr.head td { font-weight: 700; }
+.xl td { white-space: nowrap; }
+.xl td.links { white-space: normal; overflow-wrap: anywhere; min-width: 260px; color: var(--xl-link); }
+.tree { margin: 0; font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
+:root { --xl-cell: #ffffff; --xl-text: #1b1b1b; --xl-line: #d4d4d4; --xl-hdr: #f0f0f0; --xl-hdr-text: #555; --xl-link: #0b5cad; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --xl-cell: #1e1e1e; --xl-text: #e6e6e6; --xl-line: #3d3d3d; --xl-hdr: #2b2b2b; --xl-hdr-text: #aaa; --xl-link: #7fb6ff; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Image Downloader</h1>
+    <p class="sub">Download images from links or CSV, and format lists with commas and quotes.</p>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Pages">
+    <button id="tabLinks" role="tab" aria-selected="true" type="button">Paste links</button>
+    <button id="tabCsv" role="tab" aria-selected="false" type="button">CSV and VIN</button>
+    <button id="tabFmt" role="tab" aria-selected="false" type="button">Comma Separator</button>
+  </nav>
+
+  <!-- PAGE 1: pasted links -->
+  <div id="pageLinks" class="page">
+    <section class="panel">
+      <label for="input">Image URLs (commas, spaces or new lines)</label>
+      <textarea id="input" spellcheck="false" placeholder="https://example.com/a.jpg,https://example.com/b.png"></textarea>
+      <div class="row">
+        <button id="load" class="primary" type="button">Show images</button>
+        <button id="clear" type="button">Clear</button>
+        <span id="status" class="status" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section id="actions" class="panel" hidden>
+      <div class="row">
+        <button id="dlAll" class="primary" type="button">Download all as ZIP</button>
+        <button id="dlStop" type="button" hidden>Stop</button>
+        <button id="copyAll" type="button">Copy clean list</button>
+      </div>
+      <div class="bar" aria-hidden="true"><div id="allFill"></div></div>
+      <div id="allMsg" class="msg" aria-live="polite">Each Download button saves one image. Download all puts every image in a ZIP (very big lists are split into parts).</div>
+    </section>
+
+    <section id="list" class="list" aria-live="polite">
+      <div class="empty">Your images will appear here with a download button for each one.</div>
+    </section>
+  </div>
+
+  <!-- PAGE 2: CSV -->
+  <div id="pageCsv" class="page" hidden>
+    <section class="panel">
+      <label for="csvFile">1. Upload your CSV file</label>
+      <div class="msg">Needs a VIN column and a photo links column (commas or | between links). A full inventory export works too.</div>
+      <input id="csvFile" type="file" accept=".csv,text/csv,text/plain">
+      <div class="row"><button id="fmtHelp" type="button">Which CSV format works?</button></div>
+      <div id="csvInfo" class="msg" aria-live="polite"></div>
+    </section>
+
+    <section class="panel" id="csvBox" hidden>
+      <label for="vinInput">2. Type the VINs you want to download</label>
+      <textarea id="vinInput" spellcheck="false" autocapitalize="characters" placeholder="4JGFB5KB5TB672916,4JGFB4EB2TB680624"></textarea>
+      <div class="msg">Separate VINs with commas, spaces or new lines. Leave empty to use the list below (all ticked by default).</div>
+      <div id="vinMatch" class="msg" aria-live="polite"></div>
+
+      <details class="pick">
+        <summary>Or pick from all VINs in the CSV</summary>
+        <div class="pickbody">
+          <div class="row">
+            <label class="chk"><input type="checkbox" id="selAll" checked> Select all</label>
+            <span id="selCount" class="status"></span>
+          </div>
+          <div id="vinList" class="vinlist"></div>
+        </div>
+      </details>
+
+      <div class="row">
+        <label for="perZip" class="chk">VINs per ZIP</label>
+        <input id="perZip" type="number" min="1" placeholder="All" inputmode="numeric">
+        <button id="zipGo" class="primary" type="button">Download ZIP</button>
+        <button id="zipStop" type="button" hidden>Stop</button>
+      </div>
+      <div class="msg">Empty = one ZIP (split into ZIPs of 25 VINs if you choose more than 25). Each VIN gets its own folder. Type 1 for a separate ZIP per VIN.</div>
+      <div class="bar" aria-hidden="true"><div id="barFill"></div></div>
+      <div id="zipMsg" class="msg" aria-live="polite"></div>
+    </section>
+  </div>
+
+  <!-- PAGE 3: comma quote -->
+  <div id="pageFmt" class="page" hidden>
+    <div class="cqgrid">
+      <div class="cqcol">
+        <section class="panel">
+          <label for="fmtIn">Input</label>
+          <textarea id="fmtIn" spellcheck="false" placeholder="One item per line">apple
+banana
+orange
+grape
+kiwi</textarea>
+        </section>
+        <section class="panel">
+          <label for="fmtOut">Output</label>
+          <div class="row">
+            <button id="fmtCopy" class="primary" type="button">Copy to Clipboard</button>
+            <button id="fmtClear" type="button">Clear All</button>
+            <button id="fmtSend" type="button">Use in Paste links</button>
+          </div>
+          <textarea id="fmtOut" readonly spellcheck="false"></textarea>
+          <span id="fmtCount" class="status" aria-live="polite"></span>
+        </section>
+      </div>
+      <section class="panel cqopts">
+        <label for="fmtSep">Separator character</label>
+        <select id="fmtSep">
+          <option value=",">Comma (,)</option>
+          <option value=";">Semicolon (;)</option>
+          <option value="|">Pipe (|)</option>
+          <option value=" ">Space</option>
+          <option value="\t">Tab</option>
+          <option value="\n">New line</option>
+        </select>
+        <label>Quote style</label>
+        <div class="seg" id="fmtQuotes">
+          <button type="button" data-q="">No Quote</button>
+          <button type="button" data-q="'" class="active">Single Quote</button>
+          <button type="button" data-q="&quot;">Double Quote</button>
+        </div>
+        <label class="cqcheck"><input type="checkbox" id="fmtTrim" checked> Trim whitespace</label>
+        <label class="cqcheck"><input type="checkbox" id="fmtEmpty" checked> Remove empty items</label>
+      </section>
+    </div>
+  </div>
+</main>
+
+<dialog id="csvDlg" aria-labelledby="csvDlgTitle">
+  <div class="dlg">
+    <h2 id="csvDlgTitle">How to make your CSV file</h2>
+
+    <h3 class="step">Step 1. Make your sheet like this</h3>
+    <p>Open Excel or Google Sheets and fill it exactly like this. Row 1 is the heading. Then one car per row.</p>
+    <div class="xlwrap">
+      <table class="xl">
+        <thead>
+          <tr><th class="corner"></th><th>A</th><th>B</th></tr>
+        </thead>
+        <tbody>
+          <tr class="head"><th>1</th><td>VIN</td><td>Photo URL list</td></tr>
+          <tr><th>2</th><td>4JGFB5KB5TB672916</td><td class="links">https://example.com/a1.jpg,https://example.com/a2.jpg,https://example.com/a3.jpg</td></tr>
+          <tr><th>3</th><td>4JGFB4EB2TB680624</td><td class="links">https://example.com/b1.jpg,https://example.com/b2.jpg</td></tr>
+          <tr><th>4</th><td>1HGCM82633A004352</td><td class="links">https://example.com/c1.jpg</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul>
+      <li><b>Column A:</b> the VIN.</li>
+      <li><b>Column B:</b> all photo links for that car, in <b>one cell</b>, with a comma between links and no spaces needed.</li>
+      <li>Every link must start with <b>https://</b> or <b>http://</b>.</li>
+    </ul>
+
+    <h3 class="step">A full inventory export also works</h3>
+    <p>You don’t have to make a new sheet. A dealer inventory export with many columns works as it is, like this:</p>
+    <div class="xlwrap">
+      <table class="xl">
+        <thead>
+          <tr><th class="corner"></th><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th><th>F</th><th>…</th></tr>
+        </thead>
+        <tbody>
+          <tr class="head"><th>1</th><td>DealerId</td><td>VIN</td><td>Photo Url List</td><td>New/Used</td><td>Make</td><td>Model</td><td>…</td></tr>
+          <tr><th>2</th><td>MP2113</td><td>2HKRS3H24RH321578</td><td class="links">https://example.com/a1.png|https://example.com/a2.png|https://example.com/a3.jpg</td><td>U</td><td>Honda</td><td>CR-V</td><td>…</td></tr>
+          <tr><th>3</th><td>MP2113</td><td>19XFL4H96VE001616</td><td class="links"></td><td>N</td><td>Honda</td><td>Civic</td><td>…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul>
+      <li>The page finds the column named <b>VIN</b> and the column whose name has <b>Photo</b> or <b>Image</b> in it (like “Photo Url List”). It can be in any position.</li>
+      <li>Links in that cell can be separated by commas <b>,</b> or by <b>|</b>.</li>
+      <li>All other columns (Make, Model, Price and so on) are ignored.</li>
+      <li>Cars with an empty photo cell, like row 3, are skipped.</li>
+    </ul>
+
+    <h3 class="step">Step 2. Save it as CSV</h3>
+    <ul>
+      <li><b>Excel:</b> File → Save As → choose <b>CSV (Comma delimited)</b>.</li>
+      <li><b>Google Sheets:</b> File → Download → <b>Comma Separated Values (.csv)</b>.</li>
+    </ul>
+
+    <h3 class="step">Step 3. What you get</h3>
+    <p>Upload the file, choose your VINs and press Download ZIP. Each VIN gets its own folder with its photos:</p>
+    <pre class="tree">vin-images.zip
+├─ 4JGFB5KB5TB672916/
+│   ├─ a1.jpg
+│   ├─ a2.jpg
+│   └─ a3.jpg
+├─ 4JGFB4EB2TB680624/
+│   ├─ b1.jpg
+│   └─ b2.jpg
+└─ 1HGCM82633A004352/
+    └─ c1.jpg</pre>
+    <p>If one VIN is on two rows, its photos go into the same folder. Links that fail are listed in <b>_failed.txt</b> inside the ZIP.</p>
+
+    <div class="row">
+      <button id="csvSample" class="primary" type="button">Download this sample CSV</button>
+      <button id="csvDlgClose" type="button">Got it</button>
+    </div>
+    <label class="chk" style="font-weight:500"><input type="checkbox" id="csvHide"> Don’t show this automatically again</label>
+  </div>
+</dialog>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+
+  // ---------- shared helpers ----------
+  var PROXY = "https://wsrv.nl/?url=";
+  var JSZIP_SOURCES = [
+    "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
+    "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js",
+    "https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"
+  ];
+  var zipLoader = null;
+  var ZIP_LIMIT = 150 * 1024 * 1024; // start a new ZIP part after this many bytes, so the tab never runs out of memory
+
+  // Loads JSZip from the first CDN that works, so the page does not depend on one host.
+  function loadJSZip() {
+    if (window.JSZip) return Promise.resolve(window.JSZip);
+    if (zipLoader) return zipLoader;
+    zipLoader = new Promise(function (resolve, reject) {
+      var i = 0;
+      (function next() {
+        if (window.JSZip) return resolve(window.JSZip);
+        if (i >= JSZIP_SOURCES.length) { zipLoader = null; return reject(new Error("ZIP tool could not load. Check your internet connection and try again.")); }
+        var s = document.createElement("script");
+        s.src = JSZIP_SOURCES[i++];
+        s.onload = function () { window.JSZip ? resolve(window.JSZip) : next(); };
+        s.onerror = function () { s.remove(); next(); };
+        document.head.appendChild(s);
+      })();
+    });
+    return zipLoader;
+  }
+  loadJSZip().catch(function () {});
+
+  function parseUrls(text) {
+    var parts = String(text).split(/[,|\s]+/); // links can be separated by commas, | or spaces
+    var seen = {}, good = [], bad = [];
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i].trim().replace(/^["'<`]+|["'>`]+$/g, "");
+      if (!p) continue;
+      var ok = false;
+      try { var u = new URL(p); ok = (u.protocol === "http:" || u.protocol === "https:"); } catch (e) {}
+      if (!ok) { bad.push(p); continue; }
+      if (seen[p]) continue;
+      seen[p] = true; good.push(p);
+    }
+    return { good: good, bad: bad };
+  }
+
+  function baseName(url, index) {
+    var name = "";
+    try { name = decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() || ""); } catch (e) {}
+    name = name.replace(/[\\/:*?"<>|]+/g, "_");
+    if (!name) name = "image-" + (index + 1);
+    return name;
+  }
+
+  function extFromType(type) {
+    var map = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif", "image/svg+xml": "svg", "image/avif": "avif", "image/bmp": "bmp" };
+    return map[(type || "").split(";")[0]] || "";
+  }
+
+  function withExt(name, blob) {
+    if (!/\.[a-z0-9]{2,5}$/i.test(name)) { var ex = extFromType(blob.type); if (ex) name += "." + ex; }
+    return name;
+  }
+
+  function uniqueName(name, used) {
+    if (!used[name]) { used[name] = true; return name; }
+    var d = name.lastIndexOf("."), stem = d > 0 ? name.slice(0, d) : name, ext = d > 0 ? name.slice(d) : "", n = 2;
+    while (used[stem + "-" + n + ext]) n++;
+    name = stem + "-" + n + ext; used[name] = true; return name;
+  }
+
+  function looksLikePage(url) {
+    try {
+      var u = new URL(url), h = u.hostname.replace(/^www\./, "");
+      var isSearch = /(^|\.)(google|bing|yahoo|duckduckgo|yandex|baidu)\./.test(h) && /^\/(search|images|imghp|url)/.test(u.pathname);
+      return isSearch || (/(^|\.)pinterest\./.test(h) && /^\/pin\//.test(u.pathname));
+    } catch (e) { return false; }
+  }
+
+  // Works in Chrome, Edge, Firefox, Safari and in-app browsers. Falls back to opening the file.
+  function saveBlob(blob, filename) {
+    var nav = window.navigator;
+    if (nav.msSaveOrOpenBlob) { nav.msSaveOrOpenBlob(blob, filename); return; }
+    var href = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = href; a.download = filename; a.rel = "noopener"; a.style.display = "none";
+    document.body.appendChild(a);
+    try { a.click(); } catch (e) { window.open(href, "_blank"); }
+    setTimeout(function () { a.remove(); URL.revokeObjectURL(href); }, 60000);
+  }
+
+  function fetchBlob(url) {
+    return fetch(url, { mode: "cors", referrerPolicy: "no-referrer" }).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.blob();
+    });
+  }
+
+  var hostStats = {};
+  // Direct download first; if a host refuses, use the proxy (and remember that for the host).
+  async function getImage(url) {
+    var host = ""; try { host = new URL(url).host; } catch (e) {}
+    var st = hostStats[host] || (hostStats[host] = { ok: 0, fail: 0 });
+    var blob;
+    if (!(st.fail >= 2 && st.ok === 0)) {
+      try { blob = await fetchBlob(url); st.ok++; }
+      catch (e) { st.fail++; blob = await fetchBlob(PROXY + encodeURIComponent(url)); }
+    } else {
+      try { blob = await fetchBlob(PROXY + encodeURIComponent(url)); }
+      catch (e) { blob = await fetchBlob(url); st.ok++; }
+    }
+    if (!blob.size || /^text\/|json|html/i.test(blob.type || "")) throw new Error("not an image");
+    return blob;
+  }
+
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  function pool(list, n, fn, shouldStop) {
+    var next = 0, workers = [];
+    for (var k = 0; k < Math.min(n, list.length); k++) {
+      workers.push((async function () {
+        while (next < list.length && !shouldStop()) { var idx = next++; await fn(list[idx], idx); }
+      })());
+    }
+    return Promise.all(workers);
+  }
+
+  // ---------- PAGE 1: pasted links ----------
+  var input = $("input"), listEl = $("list"), statusEl = $("status"), actionsEl = $("actions");
+  var allMsg = $("allMsg"), allFill = $("allFill"), dlAll = $("dlAll"), dlStop = $("dlStop");
+  var items = [], allStop = false;
+  var PAGE_MSG = "This is a search or web page link, not an image. Open the image itself, then copy its address (long-press the image, choose Copy image address).";
+
+  function setMsg(it, text, cls) { it.msg.textContent = text; it.msg.className = "msg" + (cls ? " " + cls : ""); }
+
+  // Single image: saved on its own, as a normal file.
+  function download(it) {
+    if (it.page) { setMsg(it, PAGE_MSG, "bad"); return Promise.resolve(); }
+    it.btn.disabled = true;
+    setMsg(it, "Downloading...", "");
+    return getImage(it.url)
+      .then(function (blob) {
+        var name = withExt(it.name, blob);
+        saveBlob(blob, name);
+        setMsg(it, "Saved as " + name, "ok");
+      })
+      .catch(function () {
+        it.msg.className = "msg bad";
+        it.msg.textContent = "Direct saving is blocked for this link. ";
+        var a = document.createElement("a");
+        a.href = it.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+        a.textContent = "Tap to open the image";
+        a.style.color = "var(--accent)"; a.style.fontWeight = "600";
+        it.msg.appendChild(a);
+        it.msg.appendChild(document.createTextNode(", then press and hold it and choose Download image."));
+      })
+      .then(function () { it.btn.disabled = false; });
+  }
+
+  function render() {
+    listEl.textContent = "";
+    items.forEach(function (it) {
+      var card = document.createElement("div"); card.className = "item";
+      var thumb = document.createElement("div"); thumb.className = "thumb";
+      var img = document.createElement("img");
+      img.alt = ""; img.loading = "lazy"; img.decoding = "async"; img.referrerPolicy = "no-referrer";
+      var triedOriginal = false;
+      img.onerror = function () {
+        if (!triedOriginal) { triedOriginal = true; img.src = it.url; return; }
+        thumb.textContent = "No preview";
+      };
+      img.src = PROXY + encodeURIComponent(it.url) + "&w=176&h=176&fit=cover&q=70";
+      thumb.appendChild(img);
+
+      var meta = document.createElement("div"); meta.className = "meta";
+      var name = document.createElement("div"); name.className = "name"; name.textContent = it.name;
+      var url = document.createElement("div"); url.className = "url"; url.textContent = it.url;
+      var row = document.createElement("div"); row.className = "row";
+
+      var btn = document.createElement("button"); btn.type = "button"; btn.className = "primary"; btn.textContent = "Download";
+      btn.addEventListener("click", function () { download(it); });
+      var open = document.createElement("a"); open.className = "btn"; open.textContent = "Open";
+      open.href = it.url; open.target = "_blank"; open.rel = "noopener noreferrer";
+      var copy = document.createElement("button"); copy.type = "button"; copy.textContent = "Copy link";
+      copy.addEventListener("click", function () {
+        copyText(it.url).then(function () { setMsg(it, "Link copied", "ok"); }, function () { setMsg(it, "Copy not allowed here. Select the link above instead.", "bad"); });
+      });
+
+      var msg = document.createElement("div"); msg.className = "msg";
+      row.appendChild(btn); row.appendChild(open); row.appendChild(copy);
+      meta.appendChild(name); meta.appendChild(url); meta.appendChild(row); meta.appendChild(msg);
+      card.appendChild(thumb); card.appendChild(meta);
+      listEl.appendChild(card);
+      it.btn = btn; it.msg = msg;
+      if (it.page) { btn.disabled = true; setMsg(it, PAGE_MSG, "bad"); }
+    });
+  }
+
+  function load() {
+    var r = parseUrls(input.value), used = {};
+    items = r.good.map(function (u, i) {
+      return { url: u, name: uniqueName(baseName(u, i), used), page: looksLikePage(u) };
+    });
+    if (!items.length) {
+      listEl.innerHTML = '<div class="empty">No valid links found. Each link must start with http:// or https://</div>';
+      actionsEl.hidden = true;
+      statusEl.textContent = r.bad.length ? r.bad.length + " invalid" : "";
+      return;
+    }
+    render();
+    actionsEl.hidden = false;
+    statusEl.textContent = items.length + " image" + (items.length === 1 ? "" : "s") + (r.bad.length ? ", " + r.bad.length + " skipped" : "");
+  }
+
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).catch(function () { return legacyCopy(text); });
+    }
+    return legacyCopy(text);
+  }
+  function legacyCopy(text) {
+    return new Promise(function (res, rej) {
+      var t = document.createElement("textarea");
+      t.value = text; t.style.position = "fixed"; t.style.opacity = "0";
+      document.body.appendChild(t); t.focus(); t.select();
+      var ok = false; try { ok = document.execCommand("copy"); } catch (e) {}
+      t.remove(); ok ? res() : rej(new Error("copy failed"));
+    });
+  }
+
+  $("load").addEventListener("click", load);
+  $("clear").addEventListener("click", function () {
+    input.value = ""; items = []; actionsEl.hidden = true; statusEl.textContent = "";
+    listEl.innerHTML = '<div class="empty">Your images will appear here with a download button for each one.</div>';
+    input.focus();
+  });
+  input.addEventListener("paste", function () { setTimeout(load, 0); });
+
+  // Download all: one ZIP with every image.
+  dlAll.addEventListener("click", async function () {
+    var todo = items.filter(function (it) { return !it.page; });
+    if (!todo.length) { allMsg.className = "msg bad"; allMsg.textContent = "No downloadable image links."; return; }
+    dlAll.disabled = true; dlStop.hidden = false; allStop = false;
+    allMsg.className = "msg"; allFill.style.width = "0";
+    var done = 0, failed = [], partNo = 0, bytes = 0, inZip = 0;
+    try {
+      allMsg.textContent = "Preparing ZIP tool...";
+      var JSZip = await loadJSZip();
+      var zip = new JSZip(), used = {}, saving = Promise.resolve();
+      // Swaps in a fresh ZIP right away and builds the old one in the background, one at a time.
+      var flush = function (last) {
+        var z = zip, pn = ++partNo;
+        zip = new JSZip(); inZip = 0; bytes = 0;
+        saving = saving.then(function () {
+          allMsg.textContent = "Building ZIP part " + pn + "...";
+          return z.generateAsync({ type: "blob", compression: "STORE" }).then(function (out) {
+            saveBlob(out, last && pn === 1 ? "images.zip" : "images-part-" + pn + ".zip");
+          });
+        });
+        return saving;
+      };
+      await pool(todo, 4, async function (it) {
+        try {
+          var blob = await getImage(it.url);
+          zip.file(uniqueName(withExt(it.name, blob), used), blob);
+          inZip++; bytes += blob.size;
+          if (bytes >= ZIP_LIMIT) await flush(false);
+        } catch (e) { failed.push(it.url); }
+        done++;
+        allFill.style.width = Math.round(done / todo.length * 100) + "%";
+        allMsg.textContent = done + " of " + todo.length + " images done" + (failed.length ? ", " + failed.length + " failed" : "");
+      }, function () { return allStop; });
+      if (allStop) {
+        allMsg.className = "msg bad"; allMsg.textContent = "Stopped.";
+      } else {
+        if (failed.length) zip.file("_failed.txt", failed.join("\n"));
+        if (inZip > 0 || failed.length) await flush(true);
+        await saving;
+        allMsg.className = "msg " + (failed.length ? "bad" : "ok");
+        allMsg.textContent = "ZIP saved: " + (todo.length - failed.length) + " of " + todo.length + " images" + (partNo > 1 ? " in " + partNo + " ZIP files" : "") + (failed.length ? ". Failed links are listed in _failed.txt inside the last ZIP." : ".");
+      }
+    } catch (e) {
+      allMsg.className = "msg bad";
+      allMsg.textContent = (e && e.message) ? e.message : "Something went wrong. Try again.";
+    }
+    dlAll.disabled = false; dlStop.hidden = true;
+  });
+  dlStop.addEventListener("click", function () { allStop = true; });
+
+  $("copyAll").addEventListener("click", function () {
+    copyText(items.map(function (it) { return it.url; }).join(",")).then(
+      function () { statusEl.textContent = "List copied"; },
+      function () { statusEl.textContent = "Copy not allowed here"; });
+  });
+
+  // ---------- PAGE 2: CSV and VIN ----------
+  var vins = [], stopFlag = false;
+  var csvFile = $("csvFile"), csvInfo = $("csvInfo"), csvBox = $("csvBox"), vinListEl = $("vinList");
+  var selAll = $("selAll"), selCount = $("selCount"), perZip = $("perZip");
+  var zipGo = $("zipGo"), zipStop = $("zipStop"), barFill = $("barFill"), zipMsg = $("zipMsg");
+  var vinInput = $("vinInput"), vinMatch = $("vinMatch");
+
+  function parseCsv(text) {
+    var rows = [], row = [], f = "", q = false;
+    text = String(text).replace(/^\uFEFF/, "");
+    for (var i = 0; i < text.length; i++) {
+      var c = text[i];
+      if (q) {
+        if (c === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else { q = false; } }
+        else { f += c; }
+      } else if (c === '"') { q = true; }
+      else if (c === ",") { row.push(f); f = ""; }
+      else if (c === "\n") { row.push(f); rows.push(row); row = []; f = ""; }
+      else if (c !== "\r") { f += c; }
+    }
+    if (f !== "" || row.length) { row.push(f); rows.push(row); }
+    return rows;
+  }
+
+  function buildVins(text) {
+    var rows = parseCsv(text).filter(function (r) { return r.some(function (c) { return c.trim() !== ""; }); });
+    if (!rows.length) return [];
+    var vi = 0, ui = -1, vi2 = -1, start = 0;
+    var head = rows[0].map(function (c) { return c.trim(); });
+    if (head.some(function (c) { return /vin/i.test(c); })) {
+      start = 1;
+      head.forEach(function (c, i) {
+        if (/^vin$/i.test(c) && vi2 < 0) vi2 = i;
+        if (/photo|image|picture/i.test(c) && ui < 0) ui = i;
+      });
+      // no photo/image heading: fall back to a heading with "url" in it
+      if (ui < 0) head.forEach(function (c, i) { if (/url/i.test(c) && ui < 0) ui = i; });
+      if (vi2 >= 0) vi = vi2;
+    }
+    var map = {}, out = [];
+    for (var r = start; r < rows.length; r++) {
+      var row = rows[r];
+      var vin = (row[vi] || "").trim();
+      var cell = ui >= 0 ? row[ui] : row[row.length - 1];
+      if (!vin) continue;
+      var urls = parseUrls(cell || "").good;
+      if (!urls.length) continue;
+      if (map[vin]) { urls.forEach(function (u) { if (map[vin].urls.indexOf(u) < 0) map[vin].urls.push(u); }); continue; }
+      var rec = { vin: vin, folder: vin.replace(/[^A-Za-z0-9_-]+/g, "_"), urls: urls, checked: true };
+      map[vin] = rec; out.push(rec);
+    }
+    return out;
+  }
+
+  function typedVins() {
+    var seen = {}, out = [];
+    vinInput.value.split(/[\s,;'"`]+/).forEach(function (t) {
+      t = t.trim().toUpperCase();
+      if (t && !seen[t]) { seen[t] = true; out.push(t); }
+    });
+    return out;
+  }
+
+  function getSelection() {
+    var typed = typedVins();
+    if (!typed.length) return { list: vins.filter(function (v) { return v.checked; }), missing: [] };
+    var by = {};
+    vins.forEach(function (v) { by[v.vin.toUpperCase()] = v; });
+    var list = [], missing = [];
+    typed.forEach(function (t) { if (by[t]) list.push(by[t]); else missing.push(t); });
+    return { list: list, missing: missing };
+  }
+
+  function updateSel() {
+    var n = vins.filter(function (v) { return v.checked; }).length;
+    selCount.textContent = n + " of " + vins.length + " ticked";
+    selAll.checked = n === vins.length;
+    var s = getSelection();
+    var imgs = s.list.reduce(function (a, v) { return a + v.urls.length; }, 0);
+    var t = s.list.length ? s.list.length + " VIN" + (s.list.length === 1 ? "" : "s") + ", " + imgs + " images will be downloaded." : "Nothing selected.";
+    if (s.missing.length) t += " Not found in the CSV: " + s.missing.join(", ") + ".";
+    vinMatch.className = "msg" + (s.missing.length ? " bad" : s.list.length ? " ok" : "");
+    vinMatch.textContent = t;
+  }
+
+  function renderVins() {
+    vinListEl.textContent = "";
+    vins.forEach(function (v) {
+      var row = document.createElement("label"); row.className = "vinrow";
+      var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = v.checked;
+      cb.addEventListener("change", function () { v.checked = cb.checked; updateSel(); });
+      var t = document.createElement("span"); t.className = "v"; t.textContent = v.vin;
+      var n = document.createElement("span"); n.className = "n"; n.textContent = v.urls.length + " images";
+      row.appendChild(cb); row.appendChild(t); row.appendChild(n);
+      vinListEl.appendChild(row);
+    });
+    updateSel();
+  }
+
+  csvFile.addEventListener("change", function () {
+    var f = csvFile.files && csvFile.files[0];
+    if (!f) return;
+    csvInfo.className = "msg"; csvInfo.textContent = "Reading " + f.name + "...";
+    var rd = new FileReader();
+    rd.onload = function () {
+      vins = buildVins(rd.result);
+      if (!vins.length) {
+        csvBox.hidden = true; csvInfo.className = "msg bad";
+        csvInfo.textContent = "No VINs with image links found. The file needs 2 columns: VIN and Photo URL list.";
+        return;
+      }
+      var total = vins.reduce(function (s, v) { return s + v.urls.length; }, 0);
+      csvInfo.className = "msg ok";
+      csvInfo.textContent = "Loaded " + vins.length + " VINs and " + total + " images from " + f.name;
+      csvBox.hidden = false; zipMsg.textContent = ""; barFill.style.width = "0";
+      renderVins();
+    };
+    rd.onerror = function () { csvInfo.className = "msg bad"; csvInfo.textContent = "Could not read that file."; };
+    rd.readAsText(f);
+  });
+
+  selAll.addEventListener("change", function () {
+    vins.forEach(function (v) { v.checked = selAll.checked; });
+    renderVins();
+  });
+
+  async function runZips() {
+    var sel = getSelection().list;
+    if (!sel.length) { zipMsg.className = "msg bad"; zipMsg.textContent = "Type a VIN that is in the CSV, or tick at least one VIN in the list."; return; }
+    zipGo.disabled = true; zipStop.hidden = false; stopFlag = false; zipMsg.className = "msg";
+    try {
+      zipMsg.textContent = "Preparing ZIP tool...";
+      var JSZip = await loadJSZip();
+      var asked = parseInt(perZip.value, 10);
+      var per = asked > 0 ? asked : Math.min(sel.length, 10);
+      var groups = [];
+      for (var i = 0; i < sel.length; i += per) groups.push(sel.slice(i, i + per));
+      var grand = sel.reduce(function (s, v) { return s + v.urls.length; }, 0);
+      var done = 0, failTotal = 0;
+      barFill.style.width = "0";
+      for (var g = 0; g < groups.length && !stopFlag; g++) {
+        var zip = new JSZip(), failed = [], bytes = 0, part = 0;
+        var base = groups[g].length === 1 ? groups[g][0].folder : "vin-images" + (groups.length > 1 ? "-" + String(g + 1).padStart(2, "0") : "");
+        var saveZip = async function (isLast) {
+          part++;
+          zipMsg.textContent = "Building ZIP " + (g + 1) + " of " + groups.length + (part > 1 || !isLast ? " (part " + part + ")" : "") + "...";
+          var out = await zip.generateAsync({ type: "blob", compression: "STORE" });
+          saveBlob(out, base + (isLast && part === 1 ? "" : "-part-" + part) + ".zip");
+          zip = new JSZip(); bytes = 0; out = null;
+          await sleep(900);
+        };
+        for (var k = 0; k < groups[g].length && !stopFlag; k++) {
+          var v = groups[g][k], folder = zip.folder(v.folder), used = {};
+          await pool(v.urls, 4, async function (u, idx) {
+            try {
+              var blob = await getImage(u);
+              folder.file(uniqueName(withExt(baseName(u, idx), blob), used), blob);
+              bytes += blob.size;
+            } catch (e) { failed.push(v.vin + "  " + u); failTotal++; }
+            done++;
+            barFill.style.width = Math.round(done / grand * 100) + "%";
+            zipMsg.textContent = "ZIP " + (g + 1) + " of " + groups.length + ": " + done + " of " + grand + " images done" + (failTotal ? ", " + failTotal + " failed" : "");
+          }, function () { return stopFlag; });
+          if (bytes >= ZIP_LIMIT && k < groups[g].length - 1 && !stopFlag) await saveZip(false);
+        }
+        if (stopFlag) break;
+        if (failed.length) zip.file("_failed.txt", failed.join("\n"));
+        await saveZip(true);
+      }
+      zipMsg.className = "msg " + (stopFlag || failTotal ? "bad" : "ok");
+      zipMsg.textContent = stopFlag ? "Stopped." : "Finished. " + (grand - failTotal) + " of " + grand + " images saved" + (failTotal ? ". " + failTotal + " failed and are listed in _failed.txt inside the ZIP." : ".");
+    } catch (e) {
+      zipMsg.className = "msg bad";
+      zipMsg.textContent = "Something went wrong: " + (e && e.message ? e.message : "unknown error") + ". Try fewer VINs per ZIP.";
+    }
+    zipGo.disabled = false; zipStop.hidden = true;
+  }
+  vinInput.addEventListener("input", updateSel);
+  zipGo.addEventListener("click", runZips);
+  zipStop.addEventListener("click", function () { stopFlag = true; });
+
+  // ---------- PAGE 3: comma quote ----------
+  var fmtIn = $("fmtIn"), fmtOut = $("fmtOut"), fmtCount = $("fmtCount");
+  var fmtQ = "'";
+
+  function formatList() {
+    var list = fmtIn.value.split(/\r?\n/);
+    if ($("fmtTrim").checked) list = list.map(function (p) { return p.trim(); });
+    if ($("fmtEmpty").checked) list = list.filter(function (p) { return p.length > 0; });
+    var count = list.length;
+    list = list.map(function (p) { return fmtQ + p + fmtQ; });
+    var sep = $("fmtSep").value;
+    if (sep === "\\n") sep = "\n";
+    if (sep === "\\t") sep = "\t";
+    fmtOut.value = list.join(sep);
+    fmtCount.textContent = count + " item" + (count === 1 ? "" : "s");
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll("#fmtQuotes button"), function (b) {
+    b.addEventListener("click", function () {
+      Array.prototype.forEach.call(document.querySelectorAll("#fmtQuotes button"), function (x) { x.classList.remove("active"); });
+      b.classList.add("active");
+      fmtQ = b.getAttribute("data-q");
+      formatList();
+    });
+  });
+  ["fmtIn", "fmtSep", "fmtTrim", "fmtEmpty"].forEach(function (id) {
+    $(id).addEventListener(id === "fmtIn" ? "input" : "change", formatList);
+  });
+  $("fmtCopy").addEventListener("click", function () {
+    if (!fmtOut.value) return;
+    copyText(fmtOut.value).then(
+      function () { fmtCount.textContent = "Copied"; },
+      function () { fmtOut.focus(); fmtOut.select(); fmtCount.textContent = "Select and copy manually"; });
+  });
+  $("fmtClear").addEventListener("click", function () { fmtIn.value = ""; formatList(); fmtIn.focus(); });
+  $("fmtSend").addEventListener("click", function () {
+    var urls = parseUrls(fmtIn.value.replace(/["'`]/g, "")).good;
+    if (!urls.length) { fmtCount.textContent = "No valid links in the list"; return; }
+    input.value = urls.join(",");
+    showPage("links"); load();
+  });
+  formatList();
+
+  // ---------- tabs ----------
+  var tabs = { links: [$("tabLinks"), $("pageLinks")], csv: [$("tabCsv"), $("pageCsv")], fmt: [$("tabFmt"), $("pageFmt")] };
+  function showPage(name) {
+    Object.keys(tabs).forEach(function (k) {
+      tabs[k][1].hidden = k !== name;
+      tabs[k][0].setAttribute("aria-selected", k === name ? "true" : "false");
+    });
+  }
+  Object.keys(tabs).forEach(function (k) { tabs[k][0].addEventListener("click", function () { showPage(k); if (k === "csv") autoHelp(); }); });
+
+  // ---------- CSV format popup ----------
+  var dlg = $("csvDlg"), shownOnce = false;
+  function openHelp() {
+    if (dlg.showModal) { try { if (!dlg.open) dlg.showModal(); return; } catch (e) {} }
+    dlg.setAttribute("open", "");
+  }
+  function closeHelp() {
+    try { localStorage.setItem("csvHelpHide", $("csvHide").checked ? "1" : ""); } catch (e) {}
+    if (dlg.close) dlg.close(); else dlg.removeAttribute("open");
+  }
+  function autoHelp() {
+    var hidden = false;
+    try { hidden = localStorage.getItem("csvHelpHide") === "1"; } catch (e) {}
+    if (hidden || shownOnce) return;
+    shownOnce = true; openHelp();
+  }
+  try { $("csvHide").checked = localStorage.getItem("csvHelpHide") === "1"; } catch (e) {}
+  $("fmtHelp").addEventListener("click", openHelp);
+  $("csvDlgClose").addEventListener("click", closeHelp);
+  dlg.addEventListener("click", function (e) { if (e.target === dlg) closeHelp(); });
+  $("csvSample").addEventListener("click", function () {
+    var csv = 'VIN,Photo URL list\r\n' +
+      '4JGFB5KB5TB672916,"https://example.com/a1.jpg,https://example.com/a2.jpg,https://example.com/a3.jpg"\r\n' +
+      '4JGFB4EB2TB680624,"https://example.com/b1.jpg,https://example.com/b2.jpg"\r\n' +
+      '1HGCM82633A004352,https://example.com/c1.jpg\r\n';
+    saveBlob(new Blob([csv], { type: "text/csv" }), "sample-vin-images.csv");
+  });
+  formatList();
+})();
+</script>
+</body>
+</html>
