@@ -153,7 +153,7 @@ dialog#csvDlg { width: min(760px, calc(100vw - 24px)); }
         <button id="copyAll" type="button">Copy clean list</button>
       </div>
       <div class="bar" aria-hidden="true"><div id="allFill"></div></div>
-      <div id="allMsg" class="msg" aria-live="polite">Each Download button saves one image. Download all puts every image in a ZIP (very big lists are split into parts).</div>
+      <div id="allMsg" class="msg" aria-live="polite">Each Download button saves one image. Download all puts every image in one ZIP. In Chrome or Edge you first choose where to save it.</div>
     </section>
 
     <section id="list" class="list" aria-live="polite">
@@ -174,29 +174,32 @@ dialog#csvDlg { width: min(760px, calc(100vw - 24px)); }
     <section class="panel" id="csvBox" hidden>
       <label for="vinInput">2. Type the VINs you want to download</label>
       <textarea id="vinInput" spellcheck="false" autocapitalize="characters" placeholder="4JGFB5KB5TB672916,4JGFB4EB2TB680624"></textarea>
-      <div class="msg">Separate VINs with commas, spaces or new lines. Leave empty to use the list below (all ticked by default).</div>
+      <div class="msg">Separate VINs with commas, spaces or new lines.</div>
       <div id="vinMatch" class="msg" aria-live="polite"></div>
-
-      <details class="pick">
-        <summary>Or pick from all VINs in the CSV</summary>
-        <div class="pickbody">
-          <div class="row">
-            <label class="chk"><input type="checkbox" id="selAll" checked> Select all</label>
-            <span id="selCount" class="status"></span>
-          </div>
-          <div id="vinList" class="vinlist"></div>
-        </div>
-      </details>
-
       <div class="row">
-        <label for="perZip" class="chk">VINs per ZIP</label>
-        <input id="perZip" type="number" min="1" placeholder="All" inputmode="numeric">
         <button id="zipGo" class="primary" type="button">Download ZIP</button>
         <button id="zipStop" type="button" hidden>Stop</button>
       </div>
-      <div class="msg">Empty = one ZIP (split into ZIPs of 25 VINs if you choose more than 25). Each VIN gets its own folder. Type 1 for a separate ZIP per VIN.</div>
       <div class="bar" aria-hidden="true"><div id="barFill"></div></div>
       <div id="zipMsg" class="msg" aria-live="polite"></div>
+      <div class="msg">All VINs you typed go into one ZIP, with a folder for each VIN. In Chrome or Edge you first choose where to save it.</div>
+    </section>
+
+    <section class="panel" id="pickBox" hidden>
+      <label>3. Or pick from all VINs in the CSV</label>
+      <div class="msg">Tick the VINs you want, then press Download ZIP below the list.</div>
+      <div class="row">
+        <label class="chk"><input type="checkbox" id="selAll" checked> Select all</label>
+        <span id="selCount" class="status"></span>
+      </div>
+      <div id="vinList" class="vinlist"></div>
+      <div id="pickMatch" class="msg" aria-live="polite"></div>
+      <div class="row">
+        <button id="pickGo" class="primary" type="button">Download ZIP</button>
+        <button id="pickStop" type="button" hidden>Stop</button>
+      </div>
+      <div class="bar" aria-hidden="true"><div id="pickFill"></div></div>
+      <div id="pickMsg" class="msg" aria-live="polite"></div>
     </section>
   </div>
 
@@ -327,33 +330,103 @@ kiwi</textarea>
 
   // ---------- shared helpers ----------
   var PROXY = "https://wsrv.nl/?url=";
-  var JSZIP_SOURCES = [
-    "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
-    "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js",
-    "https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"
-  ];
-  var zipLoader = null;
-  var ZIP_LIMIT = 150 * 1024 * 1024; // start a new ZIP part after this many bytes, so the tab never runs out of memory
-
-  // Loads JSZip from the first CDN that works, so the page does not depend on one host.
-  function loadJSZip() {
-    if (window.JSZip) return Promise.resolve(window.JSZip);
-    if (zipLoader) return zipLoader;
-    zipLoader = new Promise(function (resolve, reject) {
-      var i = 0;
-      (function next() {
-        if (window.JSZip) return resolve(window.JSZip);
-        if (i >= JSZIP_SOURCES.length) { zipLoader = null; return reject(new Error("ZIP tool could not load. Check your internet connection and try again.")); }
-        var s = document.createElement("script");
-        s.src = JSZIP_SOURCES[i++];
-        s.onload = function () { window.JSZip ? resolve(window.JSZip) : next(); };
-        s.onerror = function () { s.remove(); next(); };
-        document.head.appendChild(s);
-      })();
-    });
-    return zipLoader;
+  // ---------- ZIP writer ----------
+  // Builds ONE zip and writes each image as soon as it arrives. In Chrome and Edge the zip goes
+  // straight into a file on disk, so thousands of images never fill the browser's memory.
+  var ZIP64_SIZE_AT = 0xFFFFFFFF, ZIP64_COUNT_AT = 0xFFFF; // past these, ZIP64 records are added
+  var CRC_TABLE = (function () {
+    var t = new Uint32Array(256);
+    for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+    return t;
+  })();
+  function crc32(u8) {
+    var c = 0xFFFFFFFF;
+    for (var i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 255] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
   }
-  loadJSZip().catch(function () {});
+  function put64(v, pos, n) { v.setUint32(pos, n % 4294967296, true); v.setUint32(pos + 4, Math.floor(n / 4294967296), true); }
+
+  function ZipWriter(sink) {
+    var d = new Date();
+    this.sink = sink; this.offset = 0; this.entries = []; this.chain = Promise.resolve();
+    this.enc = new TextEncoder();
+    this.time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+    this.date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  }
+  // Files are written one after another, in the order they are added.
+  ZipWriter.prototype.addFile = function (name, blob) {
+    var self = this;
+    var prep = blob.arrayBuffer().then(function (ab) { return crc32(new Uint8Array(ab)); });
+    self.chain = self.chain.then(async function () {
+      var crc = await prep, size = blob.size;
+      var nm = self.enc.encode(name), off = self.offset;
+      var h = new Uint8Array(30 + nm.length), v = new DataView(h.buffer);
+      v.setUint32(0, 0x04034b50, true); v.setUint16(4, 20, true); v.setUint16(6, 0x0800, true); v.setUint16(8, 0, true);
+      v.setUint16(10, self.time, true); v.setUint16(12, self.date, true);
+      v.setUint32(14, crc, true); v.setUint32(18, size, true); v.setUint32(22, size, true);
+      v.setUint16(26, nm.length, true); v.setUint16(28, 0, true); h.set(nm, 30);
+      await self.sink.write(h);
+      await self.sink.write(blob);
+      self.offset += h.length + size;
+      self.entries.push({ nm: nm, crc: crc, size: size, off: off });
+    });
+    return self.chain;
+  };
+  ZipWriter.prototype.finish = function () {
+    var self = this;
+    self.chain = self.chain.then(async function () {
+      var cdStart = self.offset, len = 0;
+      self.entries.forEach(function (e) { e.z64 = e.off >= ZIP64_SIZE_AT; len += 46 + e.nm.length + (e.z64 ? 12 : 0); });
+      var cd = new Uint8Array(len), v = new DataView(cd.buffer), p = 0;
+      self.entries.forEach(function (e) {
+        v.setUint32(p, 0x02014b50, true); v.setUint16(p + 4, 45, true); v.setUint16(p + 6, e.z64 ? 45 : 20, true);
+        v.setUint16(p + 8, 0x0800, true); v.setUint16(p + 10, 0, true);
+        v.setUint16(p + 12, self.time, true); v.setUint16(p + 14, self.date, true);
+        v.setUint32(p + 16, e.crc, true); v.setUint32(p + 20, e.size, true); v.setUint32(p + 24, e.size, true);
+        v.setUint16(p + 28, e.nm.length, true); v.setUint16(p + 30, e.z64 ? 12 : 0, true);
+        v.setUint32(p + 42, e.z64 ? 0xFFFFFFFF : e.off, true);
+        cd.set(e.nm, p + 46); p += 46 + e.nm.length;
+        if (e.z64) { v.setUint16(p, 1, true); v.setUint16(p + 2, 8, true); put64(v, p + 4, e.off); p += 12; }
+      });
+      await self.sink.write(cd);
+      var count = self.entries.length, cdSize = cd.length, eocdAt = cdStart + cdSize;
+      var z64 = count >= ZIP64_COUNT_AT || cdStart >= ZIP64_SIZE_AT || cdSize >= ZIP64_SIZE_AT;
+      var tail = new Uint8Array((z64 ? 76 : 0) + 22), t = new DataView(tail.buffer), q = 0;
+      if (z64) {
+        t.setUint32(0, 0x06064b50, true); put64(t, 4, 44); t.setUint16(12, 45, true); t.setUint16(14, 45, true);
+        put64(t, 24, count); put64(t, 32, count); put64(t, 40, cdSize); put64(t, 48, cdStart);
+        t.setUint32(56, 0x07064b50, true); put64(t, 64, eocdAt); t.setUint32(72, 1, true);
+        q = 76;
+      }
+      t.setUint32(q, 0x06054b50, true);
+      t.setUint16(q + 8, z64 ? 0xFFFF : count, true); t.setUint16(q + 10, z64 ? 0xFFFF : count, true);
+      t.setUint32(q + 12, z64 ? 0xFFFFFFFF : cdSize, true); t.setUint32(q + 16, z64 ? 0xFFFFFFFF : cdStart, true);
+      await self.sink.write(tail);
+      await self.sink.close();
+    });
+    return self.chain;
+  };
+
+  // Where the ZIP goes. Chrome and Edge: a file the person picks, written bit by bit.
+  // Other browsers: kept in memory and saved as one download at the end.
+  // Must be called straight from the button click, before anything else is awaited.
+  async function openSink(filename) {
+    if (window.showSaveFilePicker) {
+      try {
+        var handle = await window.showSaveFilePicker({ suggestedName: filename, types: [{ description: "ZIP file", accept: { "application/zip": [".zip"] } }] });
+        var w = await handle.createWritable();
+        return { kind: "disk", write: function (part) { return w.write(part); }, close: function () { return w.close(); } };
+      } catch (e) {
+        if (e && e.name === "AbortError") return null; // Cancel pressed in the save box
+      }
+    }
+    var parts = [];
+    return {
+      kind: "memory",
+      write: function (part) { parts.push(part); return Promise.resolve(); },
+      close: function () { saveBlob(new Blob(parts, { type: "application/zip" }), filename); parts = []; return Promise.resolve(); }
+    };
+  }
 
   function parseUrls(text) {
     var parts = String(text).split(/[,|\s]+/); // links can be separated by commas, | or spaces
@@ -417,7 +490,7 @@ kiwi</textarea>
 
   function fetchBlob(url) {
     return fetch(url, { mode: "cors", referrerPolicy: "no-referrer" }).then(function (r) {
-      if (!r.ok) throw new Error("HTTP " + r.status);
+      if (!r.ok) { var err = new Error("HTTP " + r.status); err.status = r.status; throw err; }
       return r.blob();
     });
   }
@@ -430,13 +503,32 @@ kiwi</textarea>
     var blob;
     if (!(st.fail >= 2 && st.ok === 0)) {
       try { blob = await fetchBlob(url); st.ok++; }
-      catch (e) { st.fail++; blob = await fetchBlob(PROXY + encodeURIComponent(url)); }
+      catch (e) {
+        if (e.status) throw e; // the server answered (e.g. 404): the image really isn't there, the proxy won't help
+        st.fail++; blob = await fetchBlob(PROXY + encodeURIComponent(url));
+      }
     } else {
       try { blob = await fetchBlob(PROXY + encodeURIComponent(url)); }
       catch (e) { blob = await fetchBlob(url); st.ok++; }
     }
-    if (!blob.size || /^text\/|json|html/i.test(blob.type || "")) throw new Error("not an image");
+    if (!blob.size || /^text\/|json|html/i.test(blob.type || "")) { var bad = new Error("not an image"); bad.noRetry = true; throw bad; }
     return blob;
+  }
+
+  // How many images download at the same time. Most image CDNs handle this easily.
+  var PARALLEL = 12;
+  // Retries busy or flaky links (rate limits, timeouts, dropped connections) twice, with a short wait.
+  // Missing images (404 and similar) and non-images are not retried, so they don't slow things down.
+  async function getImageRetry(url) {
+    for (var attempt = 0; ; attempt++) {
+      try { return await getImage(url); }
+      catch (e) {
+        var s = e && e.status;
+        var permanent = (e && e.noRetry) || (s >= 400 && s < 500 && s !== 408 && s !== 429);
+        if (permanent || attempt >= 2) throw e;
+        await sleep(attempt === 0 ? 600 : 2000);
+      }
+    }
   }
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
@@ -566,48 +658,30 @@ kiwi</textarea>
   dlAll.addEventListener("click", async function () {
     var todo = items.filter(function (it) { return !it.page; });
     if (!todo.length) { allMsg.className = "msg bad"; allMsg.textContent = "No downloadable image links."; return; }
+    var sink = await openSink("images.zip");
+    if (!sink) { allMsg.className = "msg"; allMsg.textContent = "Cancelled. Nothing was downloaded."; return; }
     dlAll.disabled = true; dlStop.hidden = false; allStop = false;
     allMsg.className = "msg"; allFill.style.width = "0";
-    var done = 0, failed = [], partNo = 0, bytes = 0, inZip = 0;
+    var done = 0, failed = [], used = {}, zw = new ZipWriter(sink);
     try {
-      allMsg.textContent = "Preparing ZIP tool...";
-      var JSZip = await loadJSZip();
-      var zip = new JSZip(), used = {}, saving = Promise.resolve();
-      // Swaps in a fresh ZIP right away and builds the old one in the background, one at a time.
-      var flush = function (last) {
-        var z = zip, pn = ++partNo;
-        zip = new JSZip(); inZip = 0; bytes = 0;
-        saving = saving.then(function () {
-          allMsg.textContent = "Building ZIP part " + pn + "...";
-          return z.generateAsync({ type: "blob", compression: "STORE" }).then(function (out) {
-            saveBlob(out, last && pn === 1 ? "images.zip" : "images-part-" + pn + ".zip");
-          });
-        });
-        return saving;
-      };
-      await pool(todo, 4, async function (it) {
-        try {
-          var blob = await getImage(it.url);
-          zip.file(uniqueName(withExt(it.name, blob), used), blob);
-          inZip++; bytes += blob.size;
-          if (bytes >= ZIP_LIMIT) await flush(false);
-        } catch (e) { failed.push(it.url); }
+      await pool(todo, PARALLEL, async function (it) {
+        var blob = null;
+        try { blob = await getImageRetry(it.url); } catch (e) { failed.push(it.url); }
+        if (blob) await zw.addFile(uniqueName(withExt(it.name, blob), used), blob);
         done++;
         allFill.style.width = Math.round(done / todo.length * 100) + "%";
         allMsg.textContent = done + " of " + todo.length + " images done" + (failed.length ? ", " + failed.length + " failed" : "");
       }, function () { return allStop; });
-      if (allStop) {
-        allMsg.className = "msg bad"; allMsg.textContent = "Stopped.";
-      } else {
-        if (failed.length) zip.file("_failed.txt", failed.join("\n"));
-        if (inZip > 0 || failed.length) await flush(true);
-        await saving;
-        allMsg.className = "msg " + (failed.length ? "bad" : "ok");
-        allMsg.textContent = "ZIP saved: " + (todo.length - failed.length) + " of " + todo.length + " images" + (partNo > 1 ? " in " + partNo + " ZIP files" : "") + (failed.length ? ". Failed links are listed in _failed.txt inside the last ZIP." : ".");
-      }
+      if (failed.length) await zw.addFile("_failed.txt", new Blob([failed.join("\n")], { type: "text/plain" }));
+      allMsg.textContent = "Finishing the ZIP...";
+      await zw.finish();
+      var saved = zw.entries.length - (failed.length ? 1 : 0);
+      allMsg.className = "msg " + (allStop || failed.length ? "bad" : "ok");
+      allMsg.textContent = (allStop ? "Stopped. " : "") + "ZIP saved with " + saved + " of " + todo.length + " images" +
+        (failed.length ? ". Failed links are listed in _failed.txt inside the ZIP." : ".");
     } catch (e) {
       allMsg.className = "msg bad";
-      allMsg.textContent = (e && e.message) ? e.message : "Something went wrong. Try again.";
+      allMsg.textContent = "Something went wrong: " + (e && e.message ? e.message : "unknown error") + ". Try again.";
     }
     dlAll.disabled = false; dlStop.hidden = true;
   });
@@ -622,9 +696,14 @@ kiwi</textarea>
   // ---------- PAGE 2: CSV and VIN ----------
   var vins = [], stopFlag = false;
   var csvFile = $("csvFile"), csvInfo = $("csvInfo"), csvBox = $("csvBox"), vinListEl = $("vinList");
-  var selAll = $("selAll"), selCount = $("selCount"), perZip = $("perZip");
+  var selAll = $("selAll"), selCount = $("selCount");
   var zipGo = $("zipGo"), zipStop = $("zipStop"), barFill = $("barFill"), zipMsg = $("zipMsg");
-  var vinInput = $("vinInput"), vinMatch = $("vinMatch");
+  var vinInput = $("vinInput"), vinMatch = $("vinMatch"), pickBox = $("pickBox");
+  // Step 2 downloads the typed VINs, step 3 the ticked ones. Each has its own button and progress.
+  var UI = {
+    typed: { go: zipGo, stop: zipStop, bar: barFill, msg: zipMsg },
+    ticked: { go: $("pickGo"), stop: $("pickStop"), bar: $("pickFill"), msg: $("pickMsg") }
+  };
 
   function parseCsv(text) {
     var rows = [], row = [], f = "", q = false;
@@ -682,26 +761,37 @@ kiwi</textarea>
     return out;
   }
 
-  function getSelection() {
-    var typed = typedVins();
-    if (!typed.length) return { list: vins.filter(function (v) { return v.checked; }), missing: [] };
+  function getSelection(mode) {
+    if (mode === "ticked") return { list: vins.filter(function (v) { return v.checked; }), missing: [] };
     var by = {};
     vins.forEach(function (v) { by[v.vin.toUpperCase()] = v; });
     var list = [], missing = [];
-    typed.forEach(function (t) { if (by[t]) list.push(by[t]); else missing.push(t); });
+    typedVins().forEach(function (t) { if (by[t]) list.push(by[t]); else missing.push(t); });
     return { list: list, missing: missing };
+  }
+
+  function countText(list) {
+    var imgs = list.reduce(function (a, v) { return a + v.urls.length; }, 0);
+    return list.length + " VIN" + (list.length === 1 ? "" : "s") + ", " + imgs + " images will be downloaded.";
   }
 
   function updateSel() {
     var n = vins.filter(function (v) { return v.checked; }).length;
     selCount.textContent = n + " of " + vins.length + " ticked";
     selAll.checked = n === vins.length;
-    var s = getSelection();
-    var imgs = s.list.reduce(function (a, v) { return a + v.urls.length; }, 0);
-    var t = s.list.length ? s.list.length + " VIN" + (s.list.length === 1 ? "" : "s") + ", " + imgs + " images will be downloaded." : "Nothing selected.";
-    if (s.missing.length) t += " Not found in the CSV: " + s.missing.join(", ") + ".";
-    vinMatch.className = "msg" + (s.missing.length ? " bad" : s.list.length ? " ok" : "");
-    vinMatch.textContent = t;
+
+    var s = getSelection("typed");
+    if (!typedVins().length) {
+      vinMatch.className = "msg"; vinMatch.textContent = "Type VINs above, or pick them in step 3 below.";
+    } else {
+      var t = s.list.length ? countText(s.list) : "None of these VINs are in the CSV.";
+      if (s.missing.length) t += " Not found in the CSV: " + s.missing.join(", ") + ".";
+      vinMatch.className = "msg" + (s.missing.length || !s.list.length ? " bad" : " ok");
+      vinMatch.textContent = t;
+    }
+    var k = getSelection("ticked").list;
+    $("pickMatch").className = "msg" + (k.length ? " ok" : "");
+    $("pickMatch").textContent = k.length ? countText(k) : "No VINs ticked.";
   }
 
   function renderVins() {
@@ -726,14 +816,15 @@ kiwi</textarea>
     rd.onload = function () {
       vins = buildVins(rd.result);
       if (!vins.length) {
-        csvBox.hidden = true; csvInfo.className = "msg bad";
+        csvBox.hidden = true; pickBox.hidden = true; csvInfo.className = "msg bad";
         csvInfo.textContent = "No VINs with image links found. The file needs 2 columns: VIN and Photo URL list.";
         return;
       }
       var total = vins.reduce(function (s, v) { return s + v.urls.length; }, 0);
       csvInfo.className = "msg ok";
       csvInfo.textContent = "Loaded " + vins.length + " VINs and " + total + " images from " + f.name;
-      csvBox.hidden = false; zipMsg.textContent = ""; barFill.style.width = "0";
+      csvBox.hidden = false; pickBox.hidden = false;
+      ["typed", "ticked"].forEach(function (m) { UI[m].msg.textContent = ""; UI[m].bar.style.width = "0"; });
       renderVins();
     };
     rd.onerror = function () { csvInfo.className = "msg bad"; csvInfo.textContent = "Could not read that file."; };
@@ -745,60 +836,50 @@ kiwi</textarea>
     renderVins();
   });
 
-  async function runZips() {
-    var sel = getSelection().list;
-    if (!sel.length) { zipMsg.className = "msg bad"; zipMsg.textContent = "Type a VIN that is in the CSV, or tick at least one VIN in the list."; return; }
-    zipGo.disabled = true; zipStop.hidden = false; stopFlag = false; zipMsg.className = "msg";
+  async function runZips(mode) {
+    var ui = UI[mode], zipGo = ui.go, zipStop = ui.stop, barFill = ui.bar, zipMsg = ui.msg;
+    var sel = getSelection(mode).list;
+    if (!sel.length) { zipMsg.className = "msg bad"; zipMsg.textContent = (mode === "typed" ? "Type at least one VIN that is in the CSV." : "Tick at least one VIN in the list."); return; }
+    var sink = await openSink(sel.length === 1 ? sel[0].folder + ".zip" : "vin-images.zip");
+    if (!sink) { zipMsg.className = "msg"; zipMsg.textContent = "Cancelled. Nothing was downloaded."; return; }
+    UI.typed.go.disabled = true; UI.ticked.go.disabled = true; zipStop.hidden = false; stopFlag = false; zipMsg.className = "msg";
+    var grand = sel.reduce(function (s, v) { return s + v.urls.length; }, 0);
+    var done = 0, failed = [], vinsDone = 0, zw = new ZipWriter(sink);
+    barFill.style.width = "0";
     try {
-      zipMsg.textContent = "Preparing ZIP tool...";
-      var JSZip = await loadJSZip();
-      var asked = parseInt(perZip.value, 10);
-      var per = asked > 0 ? asked : Math.min(sel.length, 10);
-      var groups = [];
-      for (var i = 0; i < sel.length; i += per) groups.push(sel.slice(i, i + per));
-      var grand = sel.reduce(function (s, v) { return s + v.urls.length; }, 0);
-      var done = 0, failTotal = 0;
-      barFill.style.width = "0";
-      for (var g = 0; g < groups.length && !stopFlag; g++) {
-        var zip = new JSZip(), failed = [], bytes = 0, part = 0;
-        var base = groups[g].length === 1 ? groups[g][0].folder : "vin-images" + (groups.length > 1 ? "-" + String(g + 1).padStart(2, "0") : "");
-        var saveZip = async function (isLast) {
-          part++;
-          zipMsg.textContent = "Building ZIP " + (g + 1) + " of " + groups.length + (part > 1 || !isLast ? " (part " + part + ")" : "") + "...";
-          var out = await zip.generateAsync({ type: "blob", compression: "STORE" });
-          saveBlob(out, base + (isLast && part === 1 ? "" : "-part-" + part) + ".zip");
-          zip = new JSZip(); bytes = 0; out = null;
-          await sleep(900);
-        };
-        for (var k = 0; k < groups[g].length && !stopFlag; k++) {
-          var v = groups[g][k], folder = zip.folder(v.folder), used = {};
-          await pool(v.urls, 4, async function (u, idx) {
-            try {
-              var blob = await getImage(u);
-              folder.file(uniqueName(withExt(baseName(u, idx), blob), used), blob);
-              bytes += blob.size;
-            } catch (e) { failed.push(v.vin + "  " + u); failTotal++; }
-            done++;
-            barFill.style.width = Math.round(done / grand * 100) + "%";
-            zipMsg.textContent = "ZIP " + (g + 1) + " of " + groups.length + ": " + done + " of " + grand + " images done" + (failTotal ? ", " + failTotal + " failed" : "");
-          }, function () { return stopFlag; });
-          if (bytes >= ZIP_LIMIT && k < groups[g].length - 1 && !stopFlag) await saveZip(false);
-        }
-        if (stopFlag) break;
-        if (failed.length) zip.file("_failed.txt", failed.join("\n"));
-        await saveZip(true);
-      }
-      zipMsg.className = "msg " + (stopFlag || failTotal ? "bad" : "ok");
-      zipMsg.textContent = stopFlag ? "Stopped." : "Finished. " + (grand - failTotal) + " of " + grand + " images saved" + (failTotal ? ". " + failTotal + " failed and are listed in _failed.txt inside the ZIP." : ".");
+      var jobs = [];
+      sel.forEach(function (v) {
+        var vin = { v: v, used: {}, left: v.urls.length };
+        v.urls.forEach(function (u, idx) { jobs.push({ vin: vin, u: u, idx: idx }); });
+      });
+      await pool(jobs, PARALLEL, async function (job) {
+        var v = job.vin.v, blob = null;
+        try { blob = await getImageRetry(job.u); } catch (e) { failed.push(v.vin + "  " + job.u); }
+        if (blob) await zw.addFile(v.folder + "/" + uniqueName(withExt(baseName(job.u, job.idx), blob), job.vin.used), blob);
+        done++;
+        if (--job.vin.left === 0) vinsDone++;
+        barFill.style.width = Math.round(done / grand * 100) + "%";
+        zipMsg.textContent = done + " of " + grand + " images done, " + vinsDone + " of " + sel.length + " VINs complete" + (failed.length ? ", " + failed.length + " failed" : "");
+      }, function () { return stopFlag; });
+      if (failed.length) await zw.addFile("_failed.txt", new Blob([failed.join("\n")], { type: "text/plain" }));
+      zipMsg.textContent = "Finishing the ZIP...";
+      await zw.finish();
+      var saved = zw.entries.length - (failed.length ? 1 : 0);
+      zipMsg.className = "msg " + (stopFlag || failed.length ? "bad" : "ok");
+      zipMsg.textContent = (stopFlag ? "Stopped. One ZIP saved with what was done: " : "Finished. One ZIP saved with ") +
+        vinsDone + " of " + sel.length + " VINs, " + saved + " of " + grand + " images" +
+        (failed.length ? ". " + failed.length + " failed and are listed in _failed.txt inside the ZIP." : ".");
     } catch (e) {
       zipMsg.className = "msg bad";
-      zipMsg.textContent = "Something went wrong: " + (e && e.message ? e.message : "unknown error") + ". Try fewer VINs per ZIP.";
+      zipMsg.textContent = "Something went wrong: " + (e && e.message ? e.message : "unknown error") + ". Try again.";
     }
-    zipGo.disabled = false; zipStop.hidden = true;
+    UI.typed.go.disabled = false; UI.ticked.go.disabled = false; zipStop.hidden = true;
   }
   vinInput.addEventListener("input", updateSel);
-  zipGo.addEventListener("click", runZips);
+  zipGo.addEventListener("click", function () { runZips("typed"); });
+  UI.ticked.go.addEventListener("click", function () { runZips("ticked"); });
   zipStop.addEventListener("click", function () { stopFlag = true; });
+  UI.ticked.stop.addEventListener("click", function () { stopFlag = true; });
 
   // ---------- PAGE 3: comma quote ----------
   var fmtIn = $("fmtIn"), fmtOut = $("fmtOut"), fmtCount = $("fmtCount");
